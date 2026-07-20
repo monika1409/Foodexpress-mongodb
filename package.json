@@ -1,0 +1,23 @@
+{
+  "name": "food-express-server",
+  "version": "1.0.0",
+  "description": "Food Express ordering site backend with MongoDB-backed menu API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "mongodb": "^6.20.0",
+    "mongoose": "^8.24.1",
+    "multer": "^2.2.0"
+  }
+}
