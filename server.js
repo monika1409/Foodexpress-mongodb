@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3000;
 // CHANGE THIS to set your own admin password.
 // You can also set it via an environment variable called ADMIN_PASSWORD
 // (recommended once this is deployed online, so the password isn't sitting in code).
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'foodadmin123';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'foodadmin51';
 
 // Tokens handed out after a correct login. Kept in memory — they reset if the server restarts,
 // which just means you'd need to log in again. Good enough for a small admin tool like this.
@@ -46,6 +46,11 @@ const upload = multer({ storage });
 
 // Serve the food site itself + uploaded images
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ── Root route — makes the plain domain load your main site ──
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index-1.html'));
+});
 
 // ── Validation helper ──
 function validateMenuPayload(body, { partial = false } = {}) {
