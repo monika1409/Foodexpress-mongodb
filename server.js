@@ -1,15 +1,52 @@
-// server.js — Express API for the food ordering menu, backed by MongoDB (Mongoose)
-require('dotenv').config();
-const path = require('path');
-const fs = require('fs');
 const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const nodemailer = require('nodemailer');
+const path = require('path');
+const fs = require('fs');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const db = require('./db');
+
+// ── Debug: confirm what actually loaded from .env ──
+// This prints once at startup so you can see exactly which SMTP settings
+// were picked up, without exposing the real password.
+console.log('--- .env check ---');
+console.log('PORT:', process.env.PORT || '(not set)');
+console.log('ADMIN_PASSWORD:', process.env.ADMIN_PASSWORD ? '(set)' : '(not set)');
+console.log('SMTP_HOST:', process.env.SMTP_HOST || '(not set)');
+console.log('SMTP_PORT:', process.env.SMTP_PORT || '(not set)');
+console.log('SMTP_USER:', process.env.SMTP_USER || '(not set)');
+console.log('SMTP_PASS:', process.env.SMTP_PASS ? '(set, ' + process.env.SMTP_PASS.length + ' chars)' : '(not set)');
+console.log('SMTP_FROM:', process.env.SMTP_FROM || '(not set)');
+console.log('------------------');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ── Email OTP setup ──
+// Fill these in your .env file to actually send emails:
+//   SMTP_HOST=smtp.gmail.com
+//   SMTP_PORT=587
+//   SMTP_USER=youraddress@gmail.com
+//   SMTP_PASS=your-app-password      (Gmail requires an "App Password", not your normal password)
+//   SMTP_FROM="Food Express" <youraddress@gmail.com>
+// Any SMTP provider works (Gmail, Outlook, SendGrid, Mailgun, etc.) — just change the host/port.
+const mailTransporter = process.env.SMTP_HOST ? nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT) || 587,
+  secure: Number(process.env.SMTP_PORT) === 465,
+  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+}) : null;
+
+// In-memory OTP store: email -> { code, expiresAt }. Resets if the server restarts,
+// which just means the person would need to request a fresh code — fine for this use case.
+const otpStore = new Map();
+const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function generateOtp() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
 
 // ── Admin password ──
 // CHANGE THIS to set your own admin password.
@@ -88,6 +125,53 @@ function normalizeMenuPayload(body) {
 }
 
 // ── Routes ──
+
+// Send a 6-digit OTP to the given email
+app.post('/api/otp/send', async (req, res) => {
+  const email = (req.body.email || '').trim().toLowerCase();
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+
+  const code = generateOtp();
+  otpStore.set(email, { code, expiresAt: Date.now() + OTP_TTL_MS });
+
+  if (!mailTransporter) {
+    // No SMTP configured yet — log it so you can still test locally, but tell the
+    // caller clearly so the frontend doesn't pretend an email was actually sent.
+    console.log(`[OTP] SMTP not configured. Code for ${email} is: ${code}`);
+    return res.status(200).json({ sent: false, reason: 'SMTP not configured on server (check .env)' });
+  }
+
+  try {
+    await mailTransporter.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: email,
+      subject: 'Your Food Express verification code',
+      text: `Your verification code is ${code}. It expires in 5 minutes.`,
+      html: `<p>Your verification code is <b style="font-size:20px">${code}</b>.</p><p>It expires in 5 minutes.</p>`,
+    });
+    res.json({ sent: true });
+  } catch (err) {
+    console.error('Failed to send OTP email:', err);
+    res.status(500).json({ error: 'Failed to send email. Check SMTP settings in .env.' });
+  }
+});
+
+// Verify a submitted OTP
+app.post('/api/otp/verify', (req, res) => {
+  const email = (req.body.email || '').trim().toLowerCase();
+  const code = (req.body.code || '').trim();
+  const entry = otpStore.get(email);
+
+  if (!entry) return res.status(400).json({ error: 'No code was requested for this email.' });
+  if (Date.now() > entry.expiresAt) {
+    otpStore.delete(email);
+    return res.status(400).json({ error: 'Code expired. Please request a new one.' });
+  }
+  if (entry.code !== code) return res.status(400).json({ error: 'Incorrect code.' });
+
+  otpStore.delete(email);
+  res.json({ verified: true });
+});
 
 // Admin login — checks password, returns a token to use for menu changes
 app.post('/api/admin/login', (req, res) => {

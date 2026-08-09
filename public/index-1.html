@@ -284,6 +284,10 @@
     border-bottom: 1px solid var(--border);
   }
   .cart-item-emoji { font-size: 32px; flex-shrink: 0; }
+  .cart-item-image {
+    width: 56px; height: 56px; flex-shrink: 0;
+    object-fit: cover; border-radius: 10px; background: var(--bg, #f3f3f3);
+  }
   .cart-item-info { flex: 1; }
   .cart-item-name { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
   .cart-item-price { font-size: 13px; color: var(--orange); font-weight: 600; }
@@ -352,8 +356,11 @@
     .hero h2 { font-size: 1.4rem; }
     .hero-stats { gap: 14px; }
     .navbar-inner { gap: 8px; }
-    .cart-sidebar { width: 100%; border-radius: 0; }
     .form-row { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 768px) {
+    .cart-sidebar { width: 100%; border-radius: 0; }
   }
 </style>
 </head>
@@ -425,7 +432,7 @@
 <div id="page-otp" class="page">
   <div class="auth-wrap">
     <div class="auth-left">
-      <div class="auth-food-icons">🔐📩🍛</div>
+      <div class="auth-food-icons">🍔🍛🥟</div>
       <h1>FOOD EXPRESS</h1>
       <p>One quick step to keep your account safe before we let you in.</p>
     </div>
@@ -598,7 +605,7 @@
   <div class="cart-items" id="cart-items">
     <div class="cart-empty"><div>🛒</div>Your cart is empty</div>
   </div>
-  <div class="cart-footer">
+  <div class="cart-footer" id="cart-footer">
     <div class="cart-line"><span>Subtotal</span><span id="cart-sub">₹0</span></div>
     <div class="cart-line"><span>Delivery fee</span><span>₹49</span></div>
     <div class="cart-total"><span>Total</span><span id="cart-total">₹0</span></div>
@@ -770,12 +777,8 @@ function socialLogin(provider) {
 }
 
 // ── OTP verification ──
-// NOTE: there's no email/SMS service wired up in this project, so the code is
-// generated here in the browser and shown in a "demo" banner so you can test
-// the flow end-to-end. To make this real, replace generateAndSendOtp() with a
-// call to your backend, which should generate the code, email/text it via a
-// provider (e.g. SendGrid, Twilio), and only return success/failure to the
-// browser — never the code itself.
+// Codes are generated and sent by the server (server.js: /api/otp/send),
+// which emails them via nodemailer if SMTP is configured in .env.
 function loadCartFor(user) {
   return JSON.parse(localStorage.getItem('fe_cart_' + user.email) || '{}');
 }
@@ -785,17 +788,38 @@ function startOtpFlow(user, cartForUser) {
   pendingCart = cartForUser;
   document.getElementById('otp-dest').textContent = user.email;
   document.getElementById('otp-error').style.display = 'none';
+  document.getElementById('otp-demo-note').textContent = '';
   document.getElementById('otp-input').value = '';
-  generateAndSendOtp();
+  sendOtpEmail();
   showPage('otp');
 }
 
-function generateAndSendOtp() {
-  otpCode = String(Math.floor(100000 + Math.random() * 900000));
-  document.getElementById('otp-demo-note').textContent =
-    `Demo mode (no email/SMS service connected): your code is ${otpCode}`;
-  showToast(`📩 OTP sent to ${pendingUser.email}`);
-  startOtpTimer();
+async function sendOtpEmail() {
+  const noteEl = document.getElementById('otp-demo-note');
+  noteEl.textContent = 'Sending code…';
+  try {
+    const res = await fetch('/api/otp/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: pendingUser.email })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      noteEl.textContent = data.error || 'Could not send the code. Please try again.';
+      return;
+    }
+    if (data.sent) {
+      noteEl.textContent = '';
+      showToast(`📩 OTP sent to ${pendingUser.email}`);
+    } else {
+      // Server has no SMTP configured yet (see server.js / .env) — the code was
+      // logged on the server console instead so you can still test the flow.
+      noteEl.textContent = 'Email service not configured on the server yet — check the server console for the code.';
+    }
+    startOtpTimer();
+  } catch (err) {
+    noteEl.textContent = 'Network error — could not reach the server.';
+  }
 }
 
 function startOtpTimer() {
@@ -817,30 +841,49 @@ function updateOtpTimerLabel() {
 }
 
 function resendOtp() {
-  generateAndSendOtp();
+  sendOtpEmail();
   document.getElementById('otp-error').style.display = 'none';
 }
 
-function verifyOtp() {
+async function verifyOtp() {
   const entered = document.getElementById('otp-input').value.trim();
   const err = document.getElementById('otp-error');
+  err.style.display = 'none';
+
   if (otpSecondsLeft <= 0) {
     err.textContent = 'That code expired. Please resend and try again.';
     err.style.display = 'block';
     return;
   }
-  if (entered !== otpCode) {
-    err.textContent = 'Incorrect code. Please try again.';
+  if (!entered) {
+    err.textContent = 'Please enter the code.';
     err.style.display = 'block';
     return;
   }
+
+  try {
+    const res = await fetch('/api/otp/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: pendingUser.email, code: entered })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      err.textContent = data.error || 'Incorrect code. Please try again.';
+      err.style.display = 'block';
+      return;
+    }
+  } catch (e) {
+    err.textContent = 'Network error — could not reach the server.';
+    err.style.display = 'block';
+    return;
+  }
+
   clearInterval(otpTimerHandle);
-  err.style.display = 'none';
   currentUser = pendingUser;
   cart = pendingCart || {};
   pendingUser = null;
   pendingCart = null;
-  otpCode = null;
   enterApp();
 }
 
@@ -848,7 +891,6 @@ function cancelOtp() {
   clearInterval(otpTimerHandle);
   pendingUser = null;
   pendingCart = null;
-  otpCode = null;
   showPage('auth');
 }
 
@@ -994,10 +1036,12 @@ function updateCartUI() {
 
   if (items.length === 0) {
     document.getElementById('cart-items').innerHTML = '<div class="cart-empty"><div>🛒</div>Your cart is empty</div>';
+    document.getElementById('cart-footer').style.display = 'none';
   } else {
+    document.getElementById('cart-footer').style.display = 'block';
     document.getElementById('cart-items').innerHTML = items.map(({ item, qty }) => `
   <div class="cart-item">
-    <img class="cart-item-image" src="${item.image}" alt="${item.name}">
+    <img class="cart-item-image" src="${item.image}" alt="${item.name}" onerror="this.onerror=null;this.src='https://placehold.co/56x56?text=%20';">
 
     <div class="cart-item-info">
       <div class="cart-item-name">${item.name}</div>
