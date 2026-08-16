@@ -393,6 +393,9 @@
           <label>Password</label>
           <input type="password" id="login-pass" placeholder="••••••••">
         </div>
+        <div style="text-align:right;margin:-8px 0 16px">
+          <a href="javascript:void(0)" onclick="openForgotPassword()" style="color:var(--orange);font-weight:600;font-size:13px;text-decoration:none">Forgot password?</a>
+        </div>
         <button class="btn-primary" onclick="doLogin()">Sign in →</button>
         <div class="auth-divider">or continue with</div>
         <div class="social-btns">
@@ -428,31 +431,50 @@
   </div>
 </div>
 
-<!-- ════════════ OTP VERIFICATION PAGE ════════════ -->
-<div id="page-otp" class="page">
+<!-- ════════════ FORGOT PASSWORD PAGE ════════════ -->
+<div id="page-forgot" class="page">
   <div class="auth-wrap">
     <div class="auth-left">
       <div class="auth-food-icons">🍔🍛🥟</div>
       <h1>FOOD EXPRESS</h1>
-      <p>One quick step to keep your account safe before we let you in.</p>
+      <p>No worries — let's get you back into your account.</p>
     </div>
     <div class="auth-right">
-      <h2>Verify it's you 🔑</h2>
-      <p class="sub">Enter the 6-digit code we sent to <strong id="otp-dest">your email</strong></p>
-      <div id="otp-error" class="auth-error">Incorrect code. Please try again.</div>
-      <div id="otp-demo-note" style="background:var(--orange-light);color:var(--orange-dark);font-size:13px;padding:10px 12px;border-radius:10px;margin-bottom:16px;line-height:1.5;"></div>
-      <div class="field">
-        <label>6-digit code</label>
-        <input type="text" id="otp-input" maxlength="6" inputmode="numeric" placeholder="••••••" style="letter-spacing:6px;font-size:20px;text-align:center">
+
+      <!-- Step 1: enter email -->
+      <div id="forgot-step-email">
+        <h2>Forgot password? 🔒</h2>
+        <p class="sub">Enter the email on your account</p>
+        <div id="forgot-email-error" class="auth-error">We couldn't find an account with that email.</div>
+        <div class="field">
+          <label>Email address</label>
+          <input type="email" id="forgot-email" placeholder="you@example.com">
+        </div>
+        <button class="btn-primary" onclick="submitForgotEmail()">Continue →</button>
+        <div style="text-align:center;margin-top:14px">
+          <a href="javascript:void(0)" onclick="cancelForgotPassword()" style="color:var(--muted);font-size:13px;text-decoration:none">← Back to sign in</a>
+        </div>
       </div>
-      <button class="btn-primary" onclick="verifyOtp()">Verify &amp; continue →</button>
-      <div class="auth-divider">
-        <span id="otp-timer">Code expires in 60s</span>
+
+      <!-- Step 2: set new password -->
+      <div id="forgot-step-reset" style="display:none">
+        <h2>Set a new password 🔑</h2>
+        <p class="sub">Choose a new password for <strong id="forgot-dest">your account</strong></p>
+        <div id="forgot-reset-error" class="auth-error">Please fix the errors below.</div>
+        <div class="field">
+          <label>New password</label>
+          <input type="password" id="forgot-new-pass" placeholder="At least 6 characters">
+        </div>
+        <div class="field">
+          <label>Confirm new password</label>
+          <input type="password" id="forgot-confirm-pass" placeholder="Re-enter new password">
+        </div>
+        <button class="btn-primary" onclick="submitNewPassword()">Reset password →</button>
+        <div style="text-align:center;margin-top:14px">
+          <a href="javascript:void(0)" onclick="cancelForgotPassword()" style="color:var(--muted);font-size:13px;text-decoration:none">← Back to sign in</a>
+        </div>
       </div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:6px">
-        <a href="javascript:void(0)" onclick="resendOtp()" style="color:var(--orange);font-weight:600;text-decoration:none">Resend code</a>
-        <a href="javascript:void(0)" onclick="cancelOtp()" style="color:var(--muted);text-decoration:none">← Back to sign in</a>
-      </div>
+
     </div>
   </div>
 </div>
@@ -702,12 +724,8 @@ let selectedStar = 0;
 // Demo user always available
 const DEMO_USER = { email: 'demo@bites.com', pass: 'demo123', first: 'Alex', last: 'Chen' };
 
-// Holds the user who passed the password check but hasn't verified their OTP yet.
-let pendingUser = null;
-let pendingCart = null;
-let otpCode = null;
-let otpTimerHandle = null;
-let otpSecondsLeft = 60;
+// Holds the email of the account currently going through the forgot-password flow.
+let forgotEmail = null;
 
 function switchTab(tab) {
   document.getElementById('login-form').style.display = tab === 'login' ? 'flex' : 'none';
@@ -726,14 +744,18 @@ function doLogin() {
 
   // Check demo account
   if (email === DEMO_USER.email && pass === DEMO_USER.pass) {
-    startOtpFlow(DEMO_USER, loadCartFor(DEMO_USER));
+    currentUser = DEMO_USER;
+    cart = loadCartFor(DEMO_USER);
+    enterApp();
     return;
   }
 
   // Check registered users
   const users = getUsers();
   if (users[email] && users[email].pass === pass) {
-    startOtpFlow(users[email], loadCartFor(users[email]));
+    currentUser = users[email];
+    cart = loadCartFor(users[email]);
+    enterApp();
   } else {
     err.textContent = 'Incorrect email or password.';
     err.style.display = 'block';
@@ -764,133 +786,104 @@ function doSignup() {
   // Save new user
   users[email] = { first, last, email, pass };
   saveUsers(users);
-  startOtpFlow(users[email], {});
+  currentUser = users[email];
+  cart = {};
+  enterApp();
 }
 
 function socialLogin(provider) {
   // The provider (Google/Facebook) has already verified the person's identity,
-  // so we skip our own OTP step here and sign them in directly.
+  // so we sign them in directly.
   const user = { first: 'Alex', last: 'Chen', email: 'alex@example.com' };
   currentUser = user;
   cart = loadCartFor(user);
   enterApp();
 }
 
-// ── OTP verification ──
-// Codes are generated and sent by the server (server.js: /api/otp/send),
-// which emails them via nodemailer if SMTP is configured in .env.
 function loadCartFor(user) {
   return JSON.parse(localStorage.getItem('fe_cart_' + user.email) || '{}');
 }
 
-function startOtpFlow(user, cartForUser) {
-  pendingUser = user;
-  pendingCart = cartForUser;
-  document.getElementById('otp-dest').textContent = user.email;
-  document.getElementById('otp-error').style.display = 'none';
-  document.getElementById('otp-demo-note').textContent = '';
-  document.getElementById('otp-input').value = '';
-  sendOtpEmail();
-  showPage('otp');
+// ── Forgot password (customer login only — the admin panel has its own,
+// separate password and is not affected by any of this) ──
+function openForgotPassword() {
+  forgotEmail = null;
+  document.getElementById('forgot-email').value = '';
+  document.getElementById('forgot-email-error').style.display = 'none';
+  document.getElementById('forgot-step-email').style.display = 'block';
+  document.getElementById('forgot-step-reset').style.display = 'none';
+  showPage('forgot');
 }
 
-async function sendOtpEmail() {
-  const noteEl = document.getElementById('otp-demo-note');
-  noteEl.textContent = 'Sending code…';
-  try {
-    const res = await fetch('/api/otp/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: pendingUser.email })
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      noteEl.textContent = data.error || 'Could not send the code. Please try again.';
-      return;
-    }
-    if (data.sent) {
-      noteEl.textContent = '';
-      showToast(`📩 OTP sent to ${pendingUser.email}`);
-    } else {
-      // Server has no SMTP configured yet (see server.js / .env) — the code was
-      // logged on the server console instead so you can still test the flow.
-      noteEl.textContent = 'Email service not configured on the server yet — check the server console for the code.';
-    }
-    startOtpTimer();
-  } catch (err) {
-    noteEl.textContent = 'Network error — could not reach the server.';
-  }
-}
-
-function startOtpTimer() {
-  clearInterval(otpTimerHandle);
-  otpSecondsLeft = 60;
-  updateOtpTimerLabel();
-  otpTimerHandle = setInterval(() => {
-    otpSecondsLeft--;
-    updateOtpTimerLabel();
-    if (otpSecondsLeft <= 0) {
-      clearInterval(otpTimerHandle);
-      document.getElementById('otp-timer').textContent = 'Code expired — tap Resend';
-    }
-  }, 1000);
-}
-
-function updateOtpTimerLabel() {
-  document.getElementById('otp-timer').textContent = `Code expires in ${otpSecondsLeft}s`;
-}
-
-function resendOtp() {
-  sendOtpEmail();
-  document.getElementById('otp-error').style.display = 'none';
-}
-
-async function verifyOtp() {
-  const entered = document.getElementById('otp-input').value.trim();
-  const err = document.getElementById('otp-error');
+function submitForgotEmail() {
+  const email = document.getElementById('forgot-email').value.trim().toLowerCase();
+  const err = document.getElementById('forgot-email-error');
   err.style.display = 'none';
 
-  if (otpSecondsLeft <= 0) {
-    err.textContent = 'That code expired. Please resend and try again.';
-    err.style.display = 'block';
-    return;
-  }
-  if (!entered) {
-    err.textContent = 'Please enter the code.';
+  if (!email) {
+    err.textContent = 'Please enter your email address.';
     err.style.display = 'block';
     return;
   }
 
-  try {
-    const res = await fetch('/api/otp/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: pendingUser.email, code: entered })
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      err.textContent = data.error || 'Incorrect code. Please try again.';
+  const users = getUsers();
+  const accountExists = email === DEMO_USER.email || !!users[email];
+  if (!accountExists) {
+    err.textContent = "We couldn't find an account with that email.";
+    err.style.display = 'block';
+    return;
+  }
+
+  forgotEmail = email;
+  document.getElementById('forgot-dest').textContent = email;
+  document.getElementById('forgot-new-pass').value = '';
+  document.getElementById('forgot-confirm-pass').value = '';
+  document.getElementById('forgot-reset-error').style.display = 'none';
+  document.getElementById('forgot-step-email').style.display = 'none';
+  document.getElementById('forgot-step-reset').style.display = 'block';
+}
+
+function submitNewPassword() {
+  const newPass = document.getElementById('forgot-new-pass').value;
+  const confirmPass = document.getElementById('forgot-confirm-pass').value;
+  const err = document.getElementById('forgot-reset-error');
+  err.style.display = 'none';
+
+  if (newPass.length < 6) {
+    err.textContent = 'Password must be at least 6 characters.';
+    err.style.display = 'block';
+    return;
+  }
+  if (newPass !== confirmPass) {
+    err.textContent = 'Passwords do not match.';
+    err.style.display = 'block';
+    return;
+  }
+
+  if (forgotEmail === DEMO_USER.email) {
+    // The built-in demo account's password only lives in memory for this session,
+    // so "resetting" it just updates it until the page is reloaded.
+    DEMO_USER.pass = newPass;
+  } else {
+    const users = getUsers();
+    if (!users[forgotEmail]) {
+      err.textContent = 'Something went wrong. Please try again.';
       err.style.display = 'block';
       return;
     }
-  } catch (e) {
-    err.textContent = 'Network error — could not reach the server.';
-    err.style.display = 'block';
-    return;
+    users[forgotEmail].pass = newPass;
+    saveUsers(users);
   }
 
-  clearInterval(otpTimerHandle);
-  currentUser = pendingUser;
-  cart = pendingCart || {};
-  pendingUser = null;
-  pendingCart = null;
-  enterApp();
+  showToast('✅ Password updated — please sign in');
+  cancelForgotPassword();
+  switchTab('login');
+  document.getElementById('login-email').value = forgotEmail;
+  forgotEmail = null;
 }
 
-function cancelOtp() {
-  clearInterval(otpTimerHandle);
-  pendingUser = null;
-  pendingCart = null;
+function cancelForgotPassword() {
+  forgotEmail = null;
   showPage('auth');
 }
 
